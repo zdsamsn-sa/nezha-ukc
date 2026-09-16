@@ -1,0 +1,89 @@
+name: Deploy Nezha to Unikraft Cloud
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_name:
+        description: "项目名（实例/服务/镜像同名）"
+        required: false
+        type: string
+        default: "nezha"
+      regions:
+        description: "部署地区"
+        required: false
+        type: choice
+        default: sin - 新加坡
+        options:
+          - sin - 新加坡
+          - dal - 美国达拉斯
+          - fra - 德国法兰克福
+          - sfo - 美国旧金山
+          - was - 美国华盛顿特区
+      memory_mb:
+        description: "内存 MB（建议 ≥512）"
+        required: false
+        type: string
+        default: "512"
+      image_tag:
+        description: "哪吒官方镜像 tag（ghcr.io/nezhahq/nezha）"
+        required: false
+        type: string
+        default: "latest"
+      frontend:
+        description: "用户前端"
+        required: false
+        type: choice
+        default: Aurora 主题
+        options:
+          - Aurora 主题
+          - 官方默认前端
+
+concurrency:
+  group: deploy-nezha
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      UNIKRAFT_API_TOKEN: ${{ secrets.UNIKRAFT_API_TOKEN }}
+      PROJECT_NAME: ${{ inputs.project_name || vars.PROJECT_NAME || 'nezha' }}
+      REGIONS: ${{ inputs.regions || vars.DEPLOY_REGIONS || 'sin' }}
+      MEMORY_MB: ${{ inputs.memory_mb || vars.MEMORY_MB || '512' }}
+      APP_PORT: "8008"
+      DATA_VOLUME: ${{ vars.DATA_VOLUME || 'nezha-data' }}
+      VOLUME_MB: ${{ vars.VOLUME_MB || '1024' }}
+      DATA_MOUNT_PATH: /dashboard/data
+      TRACE_KEY: ${{ vars.TRACE_KEY || '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Node.js（仅 Aurora 需要）
+        if: ${{ inputs.frontend != '官方默认前端' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: theme/package-lock.json
+
+      - name: 安装 unikraft CLI
+        run: |
+          VER=v0.4.2
+          curl -sL -o /tmp/u.tgz "https://github.com/unikraft-cloud/cli/releases/download/${VER}/unikraft-cli_0.4.2_linux_amd64.tar.gz"
+          tar xzf /tmp/u.tgz -C /tmp
+          sudo mv /tmp/unikraft /usr/local/bin/unikraft
+          unikraft version || true
+
+      - name: 构建镜像（哪吒 ± Aurora）
+        run: |
+          MODE=with-aurora
+          if [ "${{ inputs.frontend }}" = "官方默认前端" ]; then
+            MODE=plain
+          fi
+          bash scripts/build-nezha-aurora.sh \
+            "${{ inputs.image_tag || 'latest' }}" \
+            "${{ env.PROJECT_NAME }}" \
+            "$MODE"
+
+      - name: 部署实例
+        run: bash scripts/deploy.sh deploy
